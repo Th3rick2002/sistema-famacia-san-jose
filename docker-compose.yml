@@ -1,0 +1,101 @@
+services:
+  # Base de datos
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: farmacia-system
+      MYSQL_USER: myuser
+      MYSQL_PASSWORD: mypassword
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/backups:/backups
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    command: --bind-address=0.0.0.0
+    networks:
+      - app-network
+
+  # Backend
+  backend:
+    build: ./sistema-de-gestion-de-farmacia---backend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: docker
+      DATABASE: ${DATABASE}
+      USERNAME: ${USERNAME}
+      PASSWORD: ${PASSWORD}
+      HOSTNAME: db  # <-- Usa el nombre del servicio
+      PORT_DATABASE: ${PORT_DATABASE}
+      PORT_APP: ${PORT_APP}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_TO: ${EMAIL_TO}
+      PORT_EMAIL: ${PORT_EMAIL}
+      BACKUP_DIR: /app/backups
+    volumes:
+      - ./sistema-de-gestion-de-farmacia---backend/backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    command: >
+      sh -c "
+      echo 'Esperando 5 segundos para asegurar que MySQL esté listo...';
+      sleep 5;
+      echo 'Ejecutando migraciones...';
+      pnpx sequelize-cli db:migrate --migrations-path src/migrations --config src/config/config.json --env docker;
+      echo 'Ejecutando seeders...';
+      pnpx sequelize-cli db:seed:all --seeders-path src/seeders --config src/config/config.json --env docker;
+      echo 'Iniciando la aplicación...';
+      pnpm start
+      "
+    networks:
+      - app-network
+
+  # Frontend Vue 3
+  frontend:
+    build:
+      context: ./sistema-de-gestion-de-farmacia---frontend
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_URL=/api  # Usando Vite en lugar de Vue CLI
+    ports:
+      - "5173:80"  # Puerto default de Vite
+    volumes:
+      - ./sistema-de-gestion-de-farmacia---frontend:/app
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  # Nginx principal
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - app-network
+
+volumes:
+  mysql_data:
+
+networks:
+  app-network:
+    driver: bridge
+    name: farmacia-network
